@@ -1,13 +1,14 @@
 package deppy_client_go_test
 
 import (
-	"deppy-client-go/api"
-	"deppy-client-go/registry"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/http/httptest"
+
+	"github.com/joelanford/deppy-client-go/api"
+	"github.com/joelanford/deppy-client-go/registry"
 )
 
 func ExampleHelloWorld() {
@@ -27,7 +28,7 @@ func ExampleHelloWorld() {
 	defer server.Close()
 
 	printEntities(server)
-	// Output: {"entity":{"id":"hello","data":"world","properties":[{"type":"isGreeting","value":true}]}}
+	// Output: {"id":"hello","data":"world","properties":[{"type":"isGreeting","value":true}]}
 }
 
 func printEntities(server *httptest.Server) {

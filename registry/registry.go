@@ -1,14 +1,15 @@
 package registry
 
 import (
-	"deppy-client-go/api"
-	"deppy-client-go/internal/util"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"github.com/go-logr/logr"
 	"net/http"
 	"sort"
+
+	"github.com/go-logr/logr"
+
+	"github.com/joelanford/deppy-client-go/api"
+	"github.com/joelanford/deppy-client-go/internal/util"
 )
 
 type Registry struct {
@@ -47,19 +48,13 @@ func (r *Registry) Handler() http.Handler {
 		return entities[i].ID < entities[j].ID
 	})
 
-	type message struct {
-		Entity *api.Entity `json:"entity,omitempty"`
-		Error  string      `json:"error,omitempty"`
-	}
-
 	return http.HandlerFunc(func(resp http.ResponseWriter, _ *http.Request) {
 		enc := json.NewEncoder(resp)
 		enc.SetEscapeHTML(false)
 		for _, e := range entities {
-			if err := enc.Encode(message{Entity: e}); err != nil {
-				_ = enc.Encode(message{Error: fmt.Sprintf("failed to encode entity %q: %v", e.ID, err)})
-				r.Log.Error(err, "encode entity", "entityID", e.ID)
-				return
+			if err := enc.Encode(e); err != nil {
+				r.Log.Error(err, "error encoding entity", "entityID", e.ID)
+				continue
 			}
 		}
 	})

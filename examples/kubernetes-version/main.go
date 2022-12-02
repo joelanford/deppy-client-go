@@ -1,39 +1,77 @@
 package main
 
 import (
-	"deppy-client-go/api"
-	"deppy-client-go/registry"
 	"encoding/json"
+	"errors"
 	"flag"
-	"k8s.io/client-go/kubernetes"
-	"log"
 	"net/http"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"strconv"
+	"time"
+
+	"k8s.io/client-go/discovery"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+
+	"github.com/joelanford/deppy-client-go/api"
+	"github.com/joelanford/deppy-client-go/examples/internal/util"
+	"github.com/joelanford/deppy-client-go/registry"
 )
 
 func main() {
-	var listenAddr string
+	var (
+		listenAddr   string
+		cacheTimeout time.Duration
+	)
 	flag.StringVar(&listenAddr, "listen-addr", "localhost:8080", "Listen address of entity service.")
+	flag.DurationVar(&cacheTimeout, "cache-timeout", 0, "Time after which cached kubernetes version information is considered stale. A value of 0 means the version information will be requested exactly once ever.")
+	flag.Parse()
 
-	cfg := config.GetConfigOrDie()
-	cl, err := kubernetes.NewForConfig(cfg)
+	l := util.FatalLogr{Logger: zap.New().WithName("kubernetes-cluster-entity-source")}
+
+	reg := registry.New()
+	if err := updateEntity(reg); err != nil {
+		l.Fatal(err, "update kubernetes cluster entity")
+	}
+	lastPullTime := time.Now()
+
+	l.Info("starting http server", "listen-addr", listenAddr)
+	if err := http.ListenAndServe(listenAddr, http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if cacheTimeout != 0 && time.Now().Sub(lastPullTime) > cacheTimeout {
+			if err := updateEntity(reg); err != nil {
+				http.Error(writer, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			l.Info("refreshed cluster version information")
+			lastPullTime = time.Now()
+		}
+		reg.Handler().ServeHTTP(writer, request)
+	})); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		l.Fatal(err, "http server failed")
+	}
+}
+
+func updateEntity(reg *registry.Registry) error {
+	cfg, err := config.GetConfig()
 	if err != nil {
-		log.Fatal(err)
+		return err
+	}
+	cl, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		return err
 	}
 
-	info, err := cl.Discovery().ServerVersion()
+	info, err := cl.ServerVersion()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	infoJSON, err := json.Marshal(info)
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
 	entity := &api.Entity{
-		ID:   "cluster",
+		ID:   "kubernetes-cluster",
 		Data: infoJSON,
 		Properties: []api.TypeValue{
 			{Type: "git.tag", Value: []byte(strconv.Quote(info.GitVersion))},
@@ -42,15 +80,6 @@ func main() {
 			{Type: "semver.minorVersion", Value: []byte(info.Minor)},
 		},
 	}
-	entityJSON, err := json.Marshal(entity)
-	if err != nil {
-		log.Fatal(err)
-	}
 
-	reg := registry.New()
-	reg.MustUpsert(entity)
-
-	log.Printf("serving kubernetes cluster entity: %s", string(entityJSON))
-	log.Printf("listening on %q...", listenAddr)
-	log.Fatal(http.ListenAndServe(listenAddr, reg.Handler()))
+	return reg.Upsert(entity)
 }
